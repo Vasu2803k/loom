@@ -142,10 +142,39 @@ func toOTelAttr(key string, v interface{}) attribute.KeyValue {
 	}
 }
 
-// spanKindFor returns the OTel SpanKind for a given Loom span name.
+// TranslateLoomAttrKey maps a single Loom attribute key (and its value) to
+// the corresponding OTel semantic convention key. If no mapping exists, the
+// key is prefixed with "loom." unless it already has that prefix.
+//
+// The returned value may differ from the input when normalization applies
+// (e.g. provider "bedrock" becomes "aws.bedrock" for gen_ai.system).
+//
+// This is the exported equivalent of the internal translateAttrs helper,
+// intended for use by external OTLP exporters (e.g. loom-cloud's
+// OTLPSpanExporter) that need to emit GenAI-convention attributes without
+// duplicating the mapping table.
+func TranslateLoomAttrKey(key string, value interface{}) (string, interface{}) {
+	outKey := key
+	outVal := value
+	if mapped, ok := loomToGenAI[key]; ok {
+		outKey = mapped
+		if outKey == "gen_ai.system" {
+			if s, ok := outVal.(string); ok {
+				if norm, ok := genAISystemNorm[s]; ok {
+					outVal = norm
+				}
+			}
+		}
+	} else if !strings.HasPrefix(key, loomAttrPrefix) {
+		outKey = loomAttrPrefix + key
+	}
+	return outKey, outVal
+}
+
+// SpanKindFor returns the OTel SpanKind for a given Loom span name.
 // LLM, backend, and MCP spans are modelled as client calls (outbound I/O);
 // everything else is internal.
-func spanKindFor(name string) oteltrace.SpanKind {
+func SpanKindFor(name string) oteltrace.SpanKind {
 	switch {
 	case strings.HasPrefix(name, "llm."):
 		return oteltrace.SpanKindClient
@@ -156,4 +185,9 @@ func spanKindFor(name string) oteltrace.SpanKind {
 	default:
 		return oteltrace.SpanKindInternal
 	}
+}
+
+// spanKindFor is the unexported alias kept for internal callers.
+func spanKindFor(name string) oteltrace.SpanKind {
+	return SpanKindFor(name)
 }

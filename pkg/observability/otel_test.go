@@ -26,8 +26,101 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// buildOTelSpanContext
+// TranslateLoomAttrKey + SpanKindFor (exported helpers)
 // ---------------------------------------------------------------------------
+
+func TestTranslateLoomAttrKey(t *testing.T) {
+	tests := []struct {
+		name    string
+		key     string
+		value   interface{}
+		wantKey string
+		wantVal interface{}
+	}{
+		{
+			name:    "mapped key without normalization",
+			key:     "llm.model",
+			value:   "claude-3-sonnet",
+			wantKey: "gen_ai.request.model",
+			wantVal: "claude-3-sonnet",
+		},
+		{
+			name:    "gen_ai.system with provider normalization",
+			key:     "llm.provider",
+			value:   "bedrock",
+			wantKey: "gen_ai.system",
+			wantVal: "aws.bedrock",
+		},
+		{
+			name:    "gen_ai.system already-normalized provider",
+			key:     "llm.provider",
+			value:   "anthropic",
+			wantKey: "gen_ai.system",
+			wantVal: "anthropic",
+		},
+		{
+			name:    "unknown key gets loom. prefix",
+			key:     "custom_metric",
+			value:   42,
+			wantKey: "loom.custom_metric",
+			wantVal: 42,
+		},
+		{
+			name:    "already prefixed key unchanged",
+			key:     "loom.my_attr",
+			value:   "hello",
+			wantKey: "loom.my_attr",
+			wantVal: "hello",
+		},
+		{
+			name:    "session.id preserved as-is",
+			key:     "session.id",
+			value:   "abc-123",
+			wantKey: "session.id",
+			wantVal: "abc-123",
+		},
+		{
+			name:    "token usage mapping",
+			key:     "llm.tokens.input",
+			value:   int64(500),
+			wantKey: "gen_ai.usage.input_tokens",
+			wantVal: int64(500),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotKey, gotVal := TranslateLoomAttrKey(tt.key, tt.value)
+			if gotKey != tt.wantKey {
+				t.Errorf("key: got %q, want %q", gotKey, tt.wantKey)
+			}
+			if gotVal != tt.wantVal {
+				t.Errorf("value: got %v, want %v", gotVal, tt.wantVal)
+			}
+		})
+	}
+}
+
+func TestSpanKindForExported(t *testing.T) {
+	tests := []struct {
+		name string
+		want oteltrace.SpanKind
+	}{
+		{"llm.completion", oteltrace.SpanKindClient},
+		{"mcp.tool_call", oteltrace.SpanKindClient},
+		{"backend.query", oteltrace.SpanKindClient},
+		{"agent.chat", oteltrace.SpanKindInternal},
+		{"tool.execute", oteltrace.SpanKindInternal},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := SpanKindFor(tt.name)
+			if got != tt.want {
+				t.Errorf("SpanKindFor(%q) = %v, want %v", tt.name, got, tt.want)
+			}
+		})
+	}
+}
 
 func TestBuildOTelSpanContext(t *testing.T) {
 	t.Run("valid UUIDs produce valid span context", func(t *testing.T) {
