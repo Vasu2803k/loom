@@ -566,7 +566,6 @@ func (c *Client) ChatStream(ctx context.Context, messages []llmtypes.Message,
 		// Extract tool calls if present. They never reach tokenCallback
 		// (text only), so report them as stream activity.
 		if len(chunk.Message.ToolCalls) > 0 {
-			llmtypes.NotifyStreamActivity(ctx)
 			for _, tc := range chunk.Message.ToolCalls {
 				// Parse function arguments
 				var params map[string]interface{}
@@ -587,7 +586,17 @@ func (c *Client) ChatStream(ctx context.Context, messages []llmtypes.Message,
 					Name:  llm.ReverseToolName(c.toolNameMap, tc.Function.Name),
 					Input: params,
 				})
+				// Ollama delivers each tool call complete in one chunk, so the
+				// progress event reports the full argument size at once.
+				argsJSON, _ := json.Marshal(params)
+				llmtypes.NotifyToolInputProgress(ctx, llmtypes.ToolInputProgress{
+					Index:      len(toolCalls) - 1,
+					ToolCallID: tc.ID,
+					ToolName:   llm.ReverseToolName(c.toolNameMap, tc.Function.Name),
+					Bytes:      len(argsJSON),
+				})
 			}
+			llmtypes.NotifyStreamActivity(ctx)
 		}
 
 		// Keep final response for metadata

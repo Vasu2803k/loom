@@ -756,6 +756,7 @@ func (c *SDKClient) ChatStream(ctx context.Context, messages []llmtypes.Message,
 	toolInputBuffers := make(map[int64]*strings.Builder)
 	// Map content block index to tool call index in our array
 	blockIndexToToolIndex := make(map[int64]int)
+	toolCallState := make(map[int64]*llmtypes.ToolCall)
 
 	// Streaming thinking assembly: blocks open at content_block_start and
 	// accumulate thinking_delta / signature_delta fragments by block index.
@@ -793,6 +794,7 @@ func (c *SDKClient) ChatStream(ctx context.Context, messages []llmtypes.Message,
 				}
 				toolCallIndex := len(toolCalls)
 				toolCalls = append(toolCalls, toolCall)
+				toolCallState[event.Index] = &toolCalls[toolCallIndex]
 				// Initialize buffer for this tool's input JSON
 				toolInputBuffers[event.Index] = &strings.Builder{}
 				// Map block index to tool call index
@@ -828,11 +830,27 @@ func (c *SDKClient) ChatStream(ctx context.Context, messages []llmtypes.Message,
 			if event.Delta.Type == "input_json_delta" {
 				// Tool-input deltas never reach tokenCallback (text only);
 				// report them as stream activity, then accumulate the JSON.
-				llmtypes.NotifyStreamActivity(ctx)
-				// Accumulate the JSON delta (uses PartialJSON field, not Text)
 				if buf, exists := toolInputBuffers[event.Index]; exists {
 					buf.WriteString(event.Delta.PartialJSON)
 				}
+				if tc, ok := toolCallState[event.Index]; ok {
+					argsSoFar := ""
+					if existing, ok := tc.Input["_args"].(string); ok {
+						argsSoFar = existing
+					}
+					if event.Delta.PartialJSON != "" {
+						tc.Input["_args"] = argsSoFar + event.Delta.PartialJSON
+					}
+					if argsStr, ok := tc.Input["_args"].(string); ok {
+						llmtypes.NotifyToolInputProgress(ctx, llmtypes.ToolInputProgress{
+							Index:      blockIndexToToolIndex[event.Index],
+							ToolCallID: tc.ID,
+							ToolName:   tc.Name,
+							Bytes:      len(argsStr),
+						})
+					}
+				}
+				llmtypes.NotifyStreamActivity(ctx)
 			}
 
 		case "content_block_stop":
@@ -847,6 +865,8 @@ func (c *SDKClient) ChatStream(ctx context.Context, messages []llmtypes.Message,
 				}
 				// Clean up buffer
 				delete(toolInputBuffers, event.Index)
+				delete(blockIndexToToolIndex, event.Index)
+				delete(toolCallState, event.Index)
 			}
 
 		case "message_delta":
